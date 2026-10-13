@@ -30,7 +30,7 @@ System_Boundary(cinemaabyss, "Кинобездна") {
     Container(auth, "Auth Service", "Go", "Регистрация, вход, учётные данные; access-токен JWT (~15 мин) и refresh-токен с ротацией; ключи JWKS")
     Container(user_svc, "User Service", "Go", "Профиль, настройки, «Избранное»")
     Container(movies, "Movies Service", "Go", "Каталог: метаданные, жанры, оценки, пакет доступа фильма (в какие тарифы входит); медиа каталога")
-    Container(playback, "Playback Service", "Go", "Права доступа к контенту и воспроизведение: единственное место правила «пакет фильма входит в пакеты пользователя» (пометки в каталоге и «Смотреть»); локальный кэш пакетов; выдаёт ссылку на поток, видео идёт напрямую клиенту")
+    Container(playback, "Playback Service", "Go", "Права доступа к контенту и воспроизведение: единственное место правила «пакет фильма входит в пакеты пользователя» (пометки в каталоге и «Смотреть»); решает по локальным копиям из событий; выдаёт ссылку на поток, видео идёт напрямую клиенту")
     Container(subscription, "Subscription Service", "Go", "Тарифы и входящие в них пакеты, подписки, скидки, промокоды. Оформление: «ожидает оплаты» → сага по payment-events; неоплаченные отменяет по таймауту; истечение срока — по расписанию (без автопродления)")
     Container(payment, "Payment Service", "Go", "Платежи и возвраты. Пользователь подтверждает оплату на странице провайдера; незавершённые платежи сверяет с провайдером")
     Container(rec_adapter, "Recommendations Adapter", "Go", "Anti-corruption layer к вендору рекомендаций; хранит готовые подборки; нет подборки — «популярное» по playback-events")
@@ -43,7 +43,7 @@ System_Boundary(cinemaabyss, "Кинобездна") {
     ContainerDb(media, "Медиахранилище", "S3 (MinIO / облако)", "Постеры, трейлеры, контент открытых источников")
     ContainerDb(subscription_db, "БД подписок", "PostgreSQL", "+ outbox")
     ContainerDb(payment_db, "БД платежей", "PostgreSQL", "+ outbox")
-    ContainerDb(playback_db, "Кэш статусов подписок", "PostgreSQL", "user_id → статус и пакеты доступа; копия для чтения из subscription-events")
+    ContainerDb(playback_db, "Копии для проверки доступа", "PostgreSQL", "user_id → статус и пакеты (из subscription-events); film_id → пакет (из movie-events)")
     ContainerDb(rec_db, "Хранилище подборок", "PostgreSQL", "")
   }
 
@@ -83,8 +83,8 @@ Rel(bff, playback, "Доступность фильмов (пакетно), сс
 Rel(bff, subscription, "Тарифы, статус, оформление подписки", "HTTPS/REST")
 Rel(bff, payment, "История платежей", "HTTPS/REST")
 Rel(bff, rec_adapter, "Подборка", "HTTPS/REST")
-Rel(playback, subscription, "Перепроверка, если в кэше нет / неактивна", "HTTPS/REST")
-Rel(playback, movies, "Пакет доступа фильма (с кэшем)", "HTTPS/REST")
+Rel(playback, subscription, "Перепроверка, если в копии нет / неактивна", "HTTPS/REST")
+Rel(playback, movies, "Пакет фильма, если нет в локальной копии", "HTTPS/REST")
 Rel(subscription, payment, "Создать платёж → ссылка на оплату", "HTTPS/REST")
 
 ' ---------- Сервисы -> свои хранилища ----------
