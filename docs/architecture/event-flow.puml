@@ -14,7 +14,7 @@ Boundary(producers, "Публикуют") {
   Container(auth, "Auth Service", "Go", "Через outbox")
   Container(movies, "Movies Service", "Go", "Через outbox")
   Container(payment, "Payment Service", "Go", "Через outbox")
-  Container(playback, "Playback Service", "Go", "Публикует просмотры; держит кэш пакетов доступа пользователей")
+  Container(playback, "Playback Service", "Go", "Права доступа и воспроизведение; публикует просмотры; держит кэш пакетов доступа пользователей")
   Container(events_svc, "Events Service", "Go", "Шлюз для монолита и внешних интеграций")
 }
 
