@@ -39,7 +39,7 @@ System_Boundary(cinemaabyss, "Кинобездна") {
   Boundary(data, "Данные") {
     ContainerDb(auth_db, "БД учётных записей", "PostgreSQL", "+ outbox")
     ContainerDb(user_db, "БД пользователей", "PostgreSQL", "+ outbox")
-    ContainerDb(movies_db, "БД фильмов", "PostgreSQL", "Метаданные, пакеты доступа; + outbox")
+    ContainerDb(movies_db, "БД фильмов", "PostgreSQL", "Карточки фильмов: метаданные, пакеты доступа, источники; + outbox")
     ContainerDb(media, "Медиахранилище", "S3 (MinIO / облако)", "Постеры, трейлеры, контент открытых источников")
     ContainerDb(subscription_db, "БД подписок", "PostgreSQL", "+ outbox")
     ContainerDb(payment_db, "БД платежей", "PostgreSQL", "+ outbox")

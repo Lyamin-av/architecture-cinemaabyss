@@ -15,7 +15,7 @@
 |---|---|---|
 | **To-Be: диаграмма контейнеров (основной результат)** | [to-be-containers.puml](docs/architecture/to-be-containers.puml) | [PNG](docs/architecture/to-be-containers.png) |
 | Поток событий через Kafka (детализация асинхронного взаимодействия) | [event-flow.puml](docs/architecture/event-flow.puml) | [PNG](docs/architecture/event-flow.png) |
-| Сценарий мобильного пользователя: регистрация → вход → рекомендации → покупка подписки → просмотр (C4 Dynamic) | [scenario-mobile.puml](docs/architecture/scenario-mobile.puml) | [PNG](docs/architecture/scenario-mobile.png) |
+| Сценарий мобильного пользователя: подготовка каталога → регистрация → вход → рекомендации → покупка подписки → просмотр платного фильма партнёра или открытого из нашего S3 (C4 Dynamic) | [scenario-mobile.puml](docs/architecture/scenario-mobile.puml) | [PNG](docs/architecture/scenario-mobile.png) |
 | Переходное состояние, этап 1: Strangler Fig | [transition-stage1.puml](docs/architecture/transition-stage1.puml) | [PNG](docs/architecture/transition-stage1.png) |
 
 ![To-Be: диаграмма контейнеров](docs/architecture/to-be-containers.png)
@@ -24,7 +24,7 @@
 
 | Сервис | Ответственность | Хранилище |
 |---|---|---|
-| Auth Service | Регистрация, вход, учётные данные, выпуск JWT, ключи JWKS | PostgreSQL |
+| Auth Service | Регистрация, вход, учётные данные; выпуск access-токена (JWT) и refresh-токена с ротацией; ключи JWKS | PostgreSQL |
 | User Service | Профиль, настройки, «Избранное»; профиль создаётся по событию регистрации | PostgreSQL |
 | Movies Service | Каталог: карточки фильмов (метаданные, жанры, оценки, пакет доступа, источник — партнёр и внешний id или наш S3); импорт каталога партнёров, загрузка контента открытых источников. Видео партнёров не хранит | PostgreSQL + S3 (медиа) |
 | Subscription Service | Тарифы и входящие в них пакеты, подписки, скидки, промокоды; сага оформления | PostgreSQL |
