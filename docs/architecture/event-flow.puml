@@ -1,0 +1,64 @@
+@startuml cinemaabyss-event-flow
+' Кинобездна, To-Be — поток событий через Kafka (дополнение к диаграмме контейнеров)
+!include <C4/C4_Container>
+
+LAYOUT_LEFT_RIGHT()
+skinparam ranksep 90
+skinparam nodesep 30
+skinparam wrapWidth 200
+AddRelTag("async", $lineStyle = DashedLine())
+
+title Кинобездна — To-Be: поток событий (Kafka)
+
+Boundary(producers, "Публикуют") {
+  Container(auth, "Auth Service", "Go", "Через outbox")
+  Container(movies, "Movies Service", "Go", "Через outbox")
+  Container(payment, "Payment Service", "Go", "Через outbox")
+  Container(playback, "Playback Service", "Go", "Публикует просмотры; держит кэш пакетов доступа пользователей")
+  Container(events_svc, "Events Service", "Go", "Шлюз для монолита и внешних интеграций")
+}
+
+Boundary(kafka, "Kafka", "Retry-топики и DLQ на каждого потребителя; схемы событий — в Schema Registry") {
+  ContainerQueue(t_user, "user-events", "топик", "Зарегистрирован, вошёл, профиль изменён, добавлен в «Избранное»")
+  ContainerQueue(t_movie, "movie-events", "топик", "Фильм добавлен / изменён, оценка")
+  ContainerQueue(t_payment, "payment-events", "топик", "Оплата прошла / не прошла (с subscription_id)")
+  ContainerQueue(t_sub, "subscription-events", "топик, ключ user_id, compaction", "Статус и пакеты доступа: активирована / отменена / истекла")
+  ContainerQueue(t_playback, "playback-events", "топик", "Просмотр начат / завершён")
+}
+
+Boundary(consumers, "Читают") {
+  Container(user_svc, "User Service", "Go", "Создаёт профиль при регистрации; публикует изменения профиля и «Избранного» (через outbox)")
+  Container(subscription, "Subscription Service", "Go", "Сага оформления: оплата прошла → активировать, не прошла или таймаут → отменить; идемпотентно по payment_id; истечение срока по расписанию; публикует через outbox")
+  Container(rec_adapter, "Recommendations Adapter", "Go", "Передаёт данные вендору; по playback-events считает «популярное» для холодного старта")
+}
+
+' ---------- Публикация ----------
+Rel(auth, t_user, "Публикует", $tags="async")
+Rel(movies, t_movie, "Публикует", $tags="async")
+Rel(payment, t_payment, "Публикует", $tags="async")
+Rel(playback, t_playback, "Публикует", $tags="async")
+Rel(events_svc, t_user, "", $tags="async")
+Rel(events_svc, t_movie, "", $tags="async")
+Rel(events_svc, t_payment, "", $tags="async")
+
+' ---------- Чтение ----------
+Rel(t_user, user_svc, "Создать профиль", $tags="async")
+Rel(t_payment, subscription, "Активировать / отменить", $tags="async")
+Rel(t_user, rec_adapter, "", $tags="async")
+Rel(t_movie, rec_adapter, "", $tags="async")
+Rel(t_playback, rec_adapter, "", $tags="async")
+
+' ---------- Сервисы, которые и читают, и публикуют ----------
+Rel_Back(t_user, user_svc, "Публикует", $tags="async")
+Rel_Back(t_sub, subscription, "Публикует", $tags="async")
+Rel_Back(playback, t_sub, "Обновить кэш пакетов", $tags="async")
+
+skinparam legendFontColor #333333
+skinparam legendBackgroundColor #F5F5F5
+skinparam legendBorderColor #999999
+legend right
+  Все связи асинхронные; стрелка = направление данных
+  subscription-events с compaction: кэш Playback можно восстановить, перечитав топик
+endlegend
+
+@enduml

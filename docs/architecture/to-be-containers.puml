@@ -1,0 +1,133 @@
+@startuml cinemaabyss-to-be-containers
+' C4 Container diagram — Кинобездна, To-Be
+' Подробные обоснования решений: Project_template.md (задание 1)
+!include <C4/C4_Container>
+
+LAYOUT_TOP_DOWN()
+skinparam ranksep 70
+skinparam nodesep 40
+skinparam wrapWidth 220
+AddRelTag("async", $lineStyle = DashedLine(), $legendText = "асинхронно")
+
+title Кинобездна — To-Be: диаграмма контейнеров
+
+Person(user, "Пользователь", "Смотрит фильмы с ноутбука, телефона или Smart TV")
+
+System_Boundary(cinemaabyss, "Кинобездна") {
+
+  Boundary(clients, "Клиенты") {
+    Container(web, "Веб-приложение", "SPA, TypeScript", "")
+    Container(mobile, "Мобильное приложение", "Kotlin / Swift", "Android и iOS")
+    Container(smarttv, "Приложение Smart TV", "Kotlin / JS", "Android TV; Tizen, webOS")
+  }
+
+  Boundary(edge, "Вход") {
+    Container(gateway, "API Gateway", "Go", "Единая точка входа: TLS, проверка JWT, rate limiting, маршрутизация; приём вебхуков платёжной системы")
+    Container(bff, "BFF", "Go", "Отдельный BFF на тип клиента (Web / Mobile / Smart TV): агрегация и формат ответа")
+  }
+
+  Boundary(domain, "Доменные сервисы") {
+    Container(auth, "Auth Service", "Go", "Регистрация, вход, учётные данные, выпуск JWT, ключи JWKS")
+    Container(user_svc, "User Service", "Go", "Профиль, настройки, «Избранное»")
+    Container(movies, "Movies Service", "Go", "Каталог: метаданные, жанры, оценки, пакет доступа фильма (в какие тарифы входит); медиа каталога")
+    Container(playback, "Playback Service", "Go", "«Смотреть»: проверяет, что пакет фильма входит в пакеты подписки пользователя (локальный кэш); выдаёт ссылку на поток, видео идёт напрямую клиенту")
+    Container(subscription, "Subscription Service", "Go", "Тарифы и входящие в них пакеты, подписки, скидки, промокоды. Оформление: «ожидает оплаты» → сага по payment-events; неоплаченные отменяет по таймауту; истечение срока — по расписанию (без автопродления)")
+    Container(payment, "Payment Service", "Go", "Платежи и возвраты. Пользователь подтверждает оплату на странице провайдера; незавершённые платежи сверяет с провайдером")
+    Container(rec_adapter, "Recommendations Adapter", "Go", "Anti-corruption layer к вендору рекомендаций; хранит готовые подборки; нет подборки — «популярное» по playback-events")
+  }
+
+  Boundary(data, "Данные") {
+    ContainerDb(auth_db, "БД учётных записей", "PostgreSQL", "+ outbox")
+    ContainerDb(user_db, "БД пользователей", "PostgreSQL", "+ outbox")
+    ContainerDb(movies_db, "БД фильмов", "PostgreSQL", "Метаданные, пакеты доступа; + outbox")
+    ContainerDb(media, "Медиахранилище", "S3 (MinIO / облако)", "Постеры, трейлеры, контент открытых источников")
+    ContainerDb(subscription_db, "БД подписок", "PostgreSQL", "+ outbox")
+    ContainerDb(payment_db, "БД платежей", "PostgreSQL", "+ outbox")
+    ContainerDb(playback_db, "Кэш статусов подписок", "PostgreSQL", "user_id → статус и пакеты доступа; копия для чтения из subscription-events")
+    ContainerDb(rec_db, "Хранилище подборок", "PostgreSQL", "")
+  }
+
+  Boundary(events, "События") {
+    ContainerQueue(kafka, "Kafka", "Apache Kafka", "movie-, user-, payment-, subscription-, playback-events; retry и DLQ")
+    Container(schema_registry, "Schema Registry", "Apicurio / Confluent", "Контракты событий и их версии")
+    Container(events_svc, "Events Service", "Go", "REST-шлюз событий для монолита (на время миграции) и внешних интеграций. MVP")
+  }
+}
+
+System_Ext(payment_ext, "Платёжная система", "")
+System_Ext(cinemas_ext, "Онлайн кинотеатры", "Каталог и видеопотоки партнёров")
+System_Ext(open_ext, "Открытые источники контента", "")
+
+Boundary(rec_vendor, "Вендор рекомендаций", "Внешняя система") {
+  ContainerQueue_Ext(rabbitmq, "RabbitMQ", "AMQP", "Контракт вендора, не наша инфраструктура")
+  System_Ext(rec_ext, "Рекомендательная система", "")
+}
+
+' ---------- Пользователь и клиенты ----------
+Rel(user, web, "Использует")
+Rel(user, mobile, "Использует")
+Rel(user, smarttv, "Использует")
+Rel(web, gateway, "API", "HTTPS/REST")
+Rel(mobile, gateway, "API", "HTTPS/REST")
+Rel(smarttv, gateway, "API", "HTTPS/REST")
+
+' ---------- Вход ----------
+Rel(gateway, bff, "Маршрутизирует по типу клиента")
+Rel(gateway, auth, "Ключи JWKS (кэш)", "HTTPS")
+
+' ---------- BFF -> доменные сервисы (синхронно) ----------
+Rel(bff, auth, "Регистрация, вход", "HTTPS/REST")
+Rel(bff, user_svc, "Профиль, «Избранное»", "HTTPS/REST")
+Rel(bff, movies, "Каталог", "HTTPS/REST")
+Rel(bff, playback, "Ссылка на просмотр", "HTTPS/REST")
+Rel(bff, subscription, "Тарифы, статус, оформление подписки", "HTTPS/REST")
+Rel(bff, payment, "История платежей", "HTTPS/REST")
+Rel(bff, rec_adapter, "Подборка", "HTTPS/REST")
+Rel(playback, subscription, "Перепроверка, если в кэше нет / неактивна", "HTTPS/REST")
+Rel(playback, movies, "Пакет доступа фильма (с кэшем)", "HTTPS/REST")
+Rel(subscription, payment, "Создать платёж → ссылка на оплату", "HTTPS/REST")
+
+' ---------- Сервисы -> свои хранилища ----------
+Rel(auth, auth_db, "SQL")
+Rel(user_svc, user_db, "SQL")
+Rel(movies, movies_db, "SQL")
+Rel(movies, media, "S3 API")
+Rel(playback, media, "Presigned URL", "S3 API")
+Rel(subscription, subscription_db, "SQL")
+Rel(payment, payment_db, "SQL")
+Rel(rec_adapter, rec_db, "SQL")
+Rel(playback, playback_db, "SQL")
+
+' ---------- События (Kafka). Топики и подписки — на диаграмме cinemaabyss-event-flow ----------
+Rel(auth, kafka, "События", $tags="async")
+BiRel(user_svc, kafka, "События", $tags="async")
+Rel(movies, kafka, "События", $tags="async")
+BiRel(playback, kafka, "События", $tags="async")
+Rel(payment, kafka, "События", $tags="async")
+BiRel(subscription, kafka, "События", $tags="async")
+Rel(kafka, rec_adapter, "События", $tags="async")
+Rel(events_svc, kafka, "Публикует", $tags="async")
+Rel(events_svc, schema_registry, "Валидация", "HTTPS")
+
+' ---------- Внешние системы ----------
+Rel(payment, payment_ext, "Создание платежей, сверка статусов", "HTTPS")
+Rel(payment_ext, gateway, "Вебхук о результате оплаты", "HTTPS")
+Rel(gateway, payment, "Вебхук (подпись провайдера проверена)", "HTTPS")
+Rel(movies, cinemas_ext, "Импорт каталога", "HTTPS/REST")
+Rel(movies, open_ext, "Загрузка контента", "HTTPS")
+Rel(playback, cinemas_ext, "Подписанная ссылка на поток", "HTTPS/REST")
+Rel(rec_adapter, rabbitmq, "События в формате вендора", "AMQP", $tags="async")
+Rel(rabbitmq, rec_adapter, "Подборки", "AMQP", $tags="async")
+BiRel(rabbitmq, rec_ext, "События / подборки", "AMQP", $tags="async")
+
+skinparam legendFontColor #333333
+skinparam legendBackgroundColor #F5F5F5
+skinparam legendBorderColor #999999
+legend right
+  Сплошная линия — синхронный вызов
+  Пунктир — асинхронно (Kafka внутри, RabbitMQ у вендора); стрелка = направление данных
+  Топики и подписки на события — диаграмма «Поток событий»
+  + outbox — запись в БД и событие сохраняются в одной транзакции, затем событие уходит в Kafka
+endlegend
+
+@enduml
