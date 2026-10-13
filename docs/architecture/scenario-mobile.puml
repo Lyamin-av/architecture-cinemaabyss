@@ -56,7 +56,10 @@ Rel(bff, rec_adapter, "Подборка для user_id", "HTTPS/REST")
 Rel(rec_adapter, bff, "Персональной ещё нет → «популярное» по playback-events")
 Rel(bff, movies, "Метаданные фильмов для отображения (пакетно)", "HTTPS/REST")
 Rel(bff, playback, "Доступность фильмов [A, B, …] для user_id (пакетно)", "HTTPS/REST")
-Rel(playback, playback, "Пакеты фильмов и пакеты пользователя — из локальных копий (обновляются по movie-events и subscription-events); фильма нет в копии → запрос в Movies")
+Rel(playback, playback, "Пакеты фильмов и пакеты пользователя — из локальных копий (заполнены на шаге 3 и по subscription-events)")
+opt Фильма нет в копии (добавлен только что, событие ещё не обработано)
+Rel(playback, movies, "Пакеты и источники недостающих фильмов (пакетно)", "HTTPS/REST")
+end
 Rel(playback, bff, "A — доступно, B — нужен тариф с пакетом «Премиум»")
 Rel(bff, mobile, "Экран подборки: постеры, пометки «входит в подписку» / «нужна подписка»")
 
@@ -81,8 +84,14 @@ Rel(mobile, subscription, "Опрос статуса (через Gateway и BFF)
 Rel(mobile, gateway, "POST /playback {film_id} (JWT)", "HTTPS/REST")
 Rel(gateway, bff, "user_id")
 Rel(bff, playback, "Ссылка на просмотр film_id", "HTTPS/REST")
-Rel(playback, playback, "Пакеты пользователя из локальной копии (нет записи → перепроверка в Subscription)")
-Rel(playback, playback, "Пакет и источник фильма из локальной копии (нет → запрос в Movies)")
+Rel(playback, playback, "Пакеты пользователя из локальной копии (обновлена на шаге 42)")
+opt Записи нет или подписка неактивна (событие об оплате ещё не дошло)
+Rel(playback, subscription, "Перепроверить статус и пакеты пользователя", "HTTPS/REST")
+end
+Rel(playback, playback, "Пакет и источник фильма из локальной копии")
+opt Фильма нет в копии
+Rel(playback, movies, "Пакет и источник фильма", "HTTPS/REST")
+end
 Rel(playback, playback, "То же правило, что при пометках в каталоге: пакет фильма входит в пакеты пользователя → доступ разрешён")
 Rel(playback, cinemas_ext, "Подписанная временная ссылка на поток (по внешнему id из копии)", "HTTPS/REST")
 Rel(playback, kafka, "PlaybackStarted", "playback-events", $tags="async")
@@ -97,6 +106,7 @@ legend right
   В квадратных скобках — протокол; имя топика (user-events и т. п.) — асинхронно через Kafka
   Стрелки «через BFF и Gateway» — ответ, проходящий обратно по той же цепочке
   Без автопродления: подписка на срок, «истекла» Subscription публикует по расписанию
+  Блоки opt — запасной путь, выполняется только при условии; в основном сценарии не срабатывает
 endlegend
 
 @enduml
