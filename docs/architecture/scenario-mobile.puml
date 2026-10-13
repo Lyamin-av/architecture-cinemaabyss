@@ -29,19 +29,19 @@ System_Ext(cinemas_ext, "Онлайн кинотеатр (CDN партнёра)"
 Rel(user, mobile, "Вводит email и пароль")
 Rel(mobile, gateway, "POST /auth/register", "HTTPS/REST")
 Rel(gateway, bff, "Открытый маршрут, без JWT")
-Rel(bff, auth, "Создать учётную запись", "HTTPS/REST")
+Rel(bff, auth, "Создать учётную запись и выдать токены", "HTTPS/REST")
 Rel(auth, kafka, "UserRegistered (через outbox)", "user-events", $tags="async")
-Rel(auth, mobile, "user_id, access и refresh токены (через BFF и Gateway)")
+Rel(auth, mobile, "Ответ на шаг 4: user_id, access-токен (JWT), refresh-токен (через BFF и Gateway)")
 Rel(kafka, user_svc, "UserRegistered → создать профиль", $tags="async")
 Rel(kafka, rec_adapter, "UserRegistered → передать вендору (обезличенно)", $tags="async")
 
 == 2. Аутентификация (повторный вход) ==
 Rel(mobile, gateway, "POST /auth/login", "HTTPS/REST")
 Rel(gateway, bff, "Открытый маршрут")
-Rel(bff, auth, "Проверить пароль, выдать JWT", "HTTPS/REST")
+Rel(bff, auth, "Проверить пароль, выдать access (JWT) и refresh", "HTTPS/REST")
 Rel(auth, kafka, "UserLoggedIn (через outbox)", "user-events", $tags="async")
-Rel(auth, mobile, "access и refresh токены")
-Rel(gateway, gateway, "Дальше каждый запрос: проверка JWT по кэшу JWKS, user_id → BFF")
+Rel(auth, mobile, "Ответ на шаг 11: access-токен (JWT), refresh-токен (через BFF и Gateway)")
+Rel(gateway, gateway, "Дальше каждый запрос: проверка access-токена (JWT) по кэшу JWKS, user_id → BFF; истёк → обмен refresh на новую пару в Auth")
 
 == 3. Рекомендации ==
 Rel(mobile, gateway, "GET /home (JWT)", "HTTPS/REST")

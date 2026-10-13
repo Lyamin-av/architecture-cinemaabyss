@@ -27,7 +27,7 @@ System_Boundary(cinemaabyss, "Кинобездна") {
   }
 
   Boundary(domain, "Доменные сервисы") {
-    Container(auth, "Auth Service", "Go", "Регистрация, вход, учётные данные, выпуск JWT, ключи JWKS")
+    Container(auth, "Auth Service", "Go", "Регистрация, вход, учётные данные; access-токен JWT (~15 мин) и refresh-токен с ротацией; ключи JWKS")
     Container(user_svc, "User Service", "Go", "Профиль, настройки, «Избранное»")
     Container(movies, "Movies Service", "Go", "Каталог: метаданные, жанры, оценки, пакет доступа фильма (в какие тарифы входит); медиа каталога")
     Container(playback, "Playback Service", "Go", "«Смотреть»: проверяет, что пакет фильма входит в пакеты подписки пользователя (локальный кэш); выдаёт ссылку на поток, видео идёт напрямую клиенту")
@@ -76,7 +76,7 @@ Rel(gateway, bff, "Маршрутизирует по типу клиента")
 Rel(gateway, auth, "Ключи JWKS (кэш)", "HTTPS")
 
 ' ---------- BFF -> доменные сервисы (синхронно) ----------
-Rel(bff, auth, "Регистрация, вход", "HTTPS/REST")
+Rel(bff, auth, "Регистрация, вход, обновление токенов", "HTTPS/REST")
 Rel(bff, user_svc, "Профиль, «Избранное»", "HTTPS/REST")
 Rel(bff, movies, "Каталог", "HTTPS/REST")
 Rel(bff, playback, "Ссылка на просмотр", "HTTPS/REST")
