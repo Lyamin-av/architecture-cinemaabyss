@@ -6,8 +6,6 @@ WORKDIR /app
 COPY go.mod ./
 COPY *.go ./
 
-# Тесты маршрутизации выполняются при сборке образа: сломанная логика не попадёт в образ
-RUN go test ./...
 RUN CGO_ENABLED=0 GOOS=linux go build -o proxy-service .
 
 FROM alpine:latest

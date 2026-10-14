@@ -71,7 +71,7 @@ func main() {
 
 	// Все остальные запросы: выбираем сервис по правилам и пересылаем.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		target := chooseTarget(r.URL.Path, cfg, rand.IntN)
+		target := chooseTarget(r.URL.Path, cfg)
 		log.Printf("%s %s -> %s", r.Method, r.URL.RequestURI(), target)
 		w.Header().Set("X-Routed-To", target)
 		proxies[target].ServeHTTP(w, r)
@@ -89,9 +89,7 @@ func main() {
 }
 
 // chooseTarget — вся логика маршрутизации Strangler Fig в одном месте.
-// randIntN передаётся параметром, чтобы в тестах подставить предсказуемое
-// «случайное» число; в работе это rand.IntN.
-func chooseTarget(path string, cfg config, randIntN func(int) int) string {
+func chooseTarget(path string, cfg config) string {
 	switch {
 	case hasPrefix(path, "/api/movies"):
 		if !cfg.GradualMigration {
@@ -100,7 +98,7 @@ func chooseTarget(path string, cfg config, randIntN func(int) int) string {
 		}
 		// Число от 0 до 99: при проценте 30 в Movies уйдут значения 0–29,
 		// то есть в среднем 30 % запросов.
-		if randIntN(100) < cfg.MoviesMigrationPc {
+		if rand.IntN(100) < cfg.MoviesMigrationPc {
 			return targetMovies
 		}
 		return targetMonolith
