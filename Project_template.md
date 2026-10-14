@@ -124,6 +124,58 @@
 <img width="2221" height="617" alt="image" src="https://github.com/user-attachments/assets/73f8ba03-8707-4ead-af2d-a9477599d3e3" />
 <img width="2548" height="554" alt="image" src="https://github.com/user-attachments/assets/9cfecc7e-234d-4308-8526-f1be151593b3" />
 
+## Решение
+
+### Proxy (API Gateway) — [src/microservices/proxy](src/microservices/proxy/main.go)
+
+Go, только стандартная библиотека (`net/http`, `httputil.ReverseProxy`). Реализует Strangler Fig с [переходной диаграммы](docs/architecture/transition-stage1.puml): трафик домена фильмов постепенно переключается с монолита на Movies Service.
+
+| Путь | Куда идёт запрос |
+|---|---|
+| `/health` | отвечает сам: `{"status": true}` |
+| `/api/movies`, `/api/movies/*` | Movies Service с вероятностью `MOVIES_MIGRATION_PERCENT` %, иначе монолит; при `GRADUAL_MIGRATION=false` — всегда Movies Service |
+| `/api/events/*` | Events Service |
+| всё остальное | монолит |
+
+- Процент ограничен диапазоном 0–100, сервис выбирается случайно для каждого запроса.
+- Каждый запрос пишется в лог (`GET /api/movies -> movies-service`), в ответ добавляется заголовок `X-Routed-To` — по нему видно, какой сервис ответил.
+- Проверка постепенного перехода: изменить `MOVIES_MIGRATION_PERCENT` в `docker-compose.yml`, выполнить `docker compose up -d proxy-service` и посмотреть распределение в `docker compose logs proxy-service`. При 0 все запросы уходят в монолит, при 100 — в Movies Service, при 50 — примерно поровну.
+
+### Events Service — [src/microservices/events](src/microservices/events/main.go)
+
+Go + библиотека [segmentio/kafka-go](https://github.com/segmentio/kafka-go). Блок `events-service` в `docker-compose.yml` уже был в шаблоне (`PORT=8082`, `KAFKA_BROKERS=kafka:9092`), менять его не потребовалось.
+
+| Запрос | Ответ |
+|---|---|
+| `GET /api/events/health` | 200 `{"status": true}` |
+| `POST /api/events/movie` | событие в топик `movie-events`, 201 `{"status": "success", "event": {...}}` |
+| `POST /api/events/user` | то же, топик `user-events` |
+| `POST /api/events/payment` | то же, топик `payment-events` |
+| неизвестный тип / битый JSON / Kafka недоступна | 404 / 400 / 500 `{"error": "..."}` |
+
+Как работает:
+
+1. **Producer.** Обработчик заворачивает тело запроса в конверт `{id, type, timestamp, payload}` (схема `Event` из `api-specification.yaml`) и отправляет в топик своего типа; ответ 201 возвращается после подтверждения записи от Kafka (`RequiredAcks: RequireOne`).
+2. **Consumer.** При старте сервис запускает по читателю на каждый из трёх топиков в consumer group `events-service` и пишет каждое прочитанное событие в лог. Благодаря группе Kafka хранит позицию чтения: после перезапуска старые события не обрабатываются повторно.
+3. **Устойчивость к старту.** В compose Kafka может подняться позже сервиса; при ошибке чтения consumer ждёт 5 с и повторяет, отдельный healthcheck не нужен.
+
+В логе (`docker compose logs events-service`) каждое событие даёт пару строк с одинаковым `id` — сервис сам публикует событие и сам же его читает:
+
+```
+ОТПРАВЛЕНО в movie-events: {"id":"movie-1792005517135567369","payload":{...},"timestamp":"...","type":"movie"}
+ПРОЧИТАНО из movie-events: {"id":"movie-1792005517135567369","payload":{...},"timestamp":"...","type":"movie"}
+```
+
+**Упрощения MVP** (сознательно, задача — проверить гипотезу о применимости Kafka):
+
+- В ответе нет полей `partition` и `offset`, которые `api-specification.yaml` (`EventResponse`) помечает обязательными; обязательные поля событий (`MovieEvent`, `UserEvent`, `PaymentEvent`) не проверяются.
+- Все события пишутся в партицию по умолчанию; в топиках шаблона по одной партиции.
+- Нет соглашений To-Be: версия события, идемпотентность потребителей по `event_id`, retry-топики и DLQ, контракты в Schema Registry.
+
+**Место в архитектуре.** В To-Be Events Service — REST-шлюз событий для монолита на время миграции и для внешних интеграций; доменные сервисы в целевом состоянии публикуют события в Kafka напрямую (решение 8 задания 1).
+
+**Вывод по гипотезе.** Kafka встраивается в текущую архитектуру без изменений существующих сервисов: брокер уже есть в compose, клиент на Go — одна библиотека, producer и consumer занимают несколько десятков строк.
+
 
 
 # Задание 3
