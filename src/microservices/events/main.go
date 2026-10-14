@@ -35,12 +35,11 @@ var eventTypes = map[string]struct {
 func main() {
 	brokers := strings.Split(os.Getenv("KAFKA_BROKERS"), ",")
 
-	// 1. Producer: один на все топики, топик указываем в каждом сообщении
-	writer := &kafka.Writer{
-		Addr:                   kafka.TCP(brokers...),
-		RequiredAcks:           kafka.RequireOne,      // ждём подтверждения от Kafka
-		BatchTimeout:           10 * time.Millisecond, // по умолчанию копит пачку 1 с — слишком долго для API
-		AllowAutoTopicCreation: true,
+	// 1. Клиент Kafka для отправки: в ответе Kafka сообщает партицию и смещение,
+	//    а их требует контракт ответа (EventResponse в api-specification.yaml)
+	client := &kafka.Client{
+		Addr:    kafka.TCP(brokers...),
+		Timeout: 10 * time.Second,
 	}
 
 	// 2. Consumer: по горутине на каждый топик, читаем и пишем в лог
@@ -53,7 +52,7 @@ func main() {
 		writeJSON(w, http.StatusOK, map[string]any{"status": true})
 	})
 	http.HandleFunc("/api/events/", func(w http.ResponseWriter, r *http.Request) {
-		createEvent(writer, w, r)
+		createEvent(client, w, r)
 	})
 
 	log.Printf("Events service запущен на :%s, Kafka: %v", os.Getenv("PORT"), brokers)
@@ -61,7 +60,7 @@ func main() {
 }
 
 // createEvent обрабатывает POST /api/events/{movie|user|payment}
-func createEvent(writer *kafka.Writer, w http.ResponseWriter, r *http.Request) {
+func createEvent(client *kafka.Client, w http.ResponseWriter, r *http.Request) {
 	eventType := strings.TrimPrefix(r.URL.Path, "/api/events/")
 	t, ok := eventTypes[eventType]
 	if !ok {
@@ -90,17 +89,32 @@ func createEvent(writer *kafka.Writer, w http.ResponseWriter, r *http.Request) {
 	event := Event{ID: newID(), Type: eventType, Timestamp: time.Now().UTC(), Payload: payload}
 	value, _ := json.Marshal(event)
 
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
-	err := writer.WriteMessages(ctx, kafka.Message{Topic: t.topic, Key: []byte(event.ID), Value: value})
+	const partition = 0 // в топиках шаблона по одной партиции (KAFKA_CREATE_TOPICS: "...:1:1")
+	res, err := client.Produce(r.Context(), &kafka.ProduceRequest{
+		Topic:        t.topic,
+		Partition:    partition,
+		RequiredAcks: kafka.RequireOne, // ждём подтверждения, что Kafka записала
+		Records: kafka.NewRecordReader(kafka.Record{
+			Key:   kafka.NewBytes([]byte(event.ID)),
+			Value: kafka.NewBytes(value),
+		}),
+	})
+	if err == nil {
+		err = res.Error // ошибка может прийти и внутри ответа Kafka
+	}
 	if err != nil {
 		log.Printf("ОШИБКА отправки в %s: %v", t.topic, err)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "Kafka недоступна: " + err.Error()})
 		return
 	}
 
-	log.Printf("ОТПРАВЛЕНО в %s: id=%s", t.topic, event.ID)
-	writeJSON(w, http.StatusCreated, map[string]any{"status": "success", "event": event})
+	log.Printf("ОТПРАВЛЕНО в %s [partition=%d offset=%d]: id=%s", t.topic, partition, res.BaseOffset, event.ID)
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"status":    "success",
+		"partition": partition,
+		"offset":    res.BaseOffset, // смещение записанного сообщения
+		"event":     event,
+	})
 }
 
 // consume бесконечно читает топик и пишет каждое событие в лог.
