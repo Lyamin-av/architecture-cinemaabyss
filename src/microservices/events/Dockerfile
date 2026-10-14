@@ -1,0 +1,24 @@
+FROM golang:1.23-alpine AS builder
+
+WORKDIR /app
+
+# Сначала только go.mod и go.sum: слой с зависимостями кэшируется,
+# пока список библиотек не меняется
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY *.go ./
+
+RUN CGO_ENABLED=0 GOOS=linux go build -o events-service .
+
+FROM alpine:latest
+
+RUN apk --no-cache add ca-certificates
+
+WORKDIR /root/
+
+COPY --from=builder /app/events-service .
+
+EXPOSE 8082
+
+CMD ["./events-service"]
