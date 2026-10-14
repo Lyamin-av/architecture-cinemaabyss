@@ -120,7 +120,9 @@
     - Добавьте в docker-compose новый сервис, kafka там уже есть
 
 Необходимые тесты для проверки этого API вызываются при запуске npm run test:local из папки tests/postman 
-Приложите скриншот тестов и скриншот состояния топиков Kafka из UI http://localhost:8090 
+Приложите скриншот тестов и скриншот состояния топиков Kafka из UI http://localhost:8090
+<img width="2221" height="617" alt="image" src="https://github.com/user-attachments/assets/73f8ba03-8707-4ead-af2d-a9477599d3e3" />
+
 
 # Задание 3
 
