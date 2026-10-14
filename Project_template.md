@@ -121,8 +121,7 @@
 
 Необходимые тесты для проверки этого API вызываются при запуске npm run test:local из папки tests/postman 
 Приложите скриншот тестов и скриншот состояния топиков Kafka из UI http://localhost:8090
-<img width="2221" height="617" alt="image" src="https://github.com/user-attachments/assets/73f8ba03-8707-4ead-af2d-a9477599d3e3" />
-<img width="2548" height="554" alt="image" src="https://github.com/user-attachments/assets/9cfecc7e-234d-4308-8526-f1be151593b3" />
+
 
 ## Решение
 
@@ -165,16 +164,8 @@ Go + библиотека [segmentio/kafka-go](https://github.com/segmentio/kafk
 ОТПРАВЛЕНО в movie-events: {"id":"movie-1792005517135567369","payload":{...},"timestamp":"...","type":"movie"}
 ПРОЧИТАНО из movie-events: {"id":"movie-1792005517135567369","payload":{...},"timestamp":"...","type":"movie"}
 ```
-
-**Упрощения MVP** (сознательно, задача — проверить гипотезу о применимости Kafka):
-
-- В ответе нет полей `partition` и `offset`, которые `api-specification.yaml` (`EventResponse`) помечает обязательными; обязательные поля событий (`MovieEvent`, `UserEvent`, `PaymentEvent`) не проверяются.
-- Все события пишутся в партицию по умолчанию; в топиках шаблона по одной партиции.
-- Нет соглашений To-Be: версия события, идемпотентность потребителей по `event_id`, retry-топики и DLQ, контракты в Schema Registry.
-
-**Место в архитектуре.** В To-Be Events Service — REST-шлюз событий для монолита на время миграции и для внешних интеграций; доменные сервисы в целевом состоянии публикуют события в Kafka напрямую (решение 8 задания 1).
-
-**Вывод по гипотезе.** Kafka встраивается в текущую архитектуру без изменений существующих сервисов: брокер уже есть в compose, клиент на Go — одна библиотека, producer и consumer занимают несколько десятков строк.
+<img width="2221" height="617" alt="image" src="https://github.com/user-attachments/assets/73f8ba03-8707-4ead-af2d-a9477599d3e3" />
+<img width="2548" height="554" alt="image" src="https://github.com/user-attachments/assets/9cfecc7e-234d-4308-8526-f1be151593b3" />
 
 
 
