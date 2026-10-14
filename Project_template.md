@@ -125,48 +125,51 @@
 
 ## Решение
 
-### Proxy (API Gateway) — [src/microservices/proxy](src/microservices/proxy/main.go)
+### Proxy
 
-Go, только стандартная библиотека (`net/http`, `httputil.ReverseProxy`). Реализует Strangler Fig с [переходной диаграммы](docs/architecture/transition-stage1.puml): трафик домена фильмов постепенно переключается с монолита на Movies Service.
+Код: [src/microservices/proxy/main.go](src/microservices/proxy/main.go). Написан на Go без внешних библиотек, проксирование через `httputil.ReverseProxy`.
 
-| Путь | Куда идёт запрос |
+Маршрутизация:
+
+| Путь | Сервис |
 |---|---|
-| `/health` | отвечает сам: `{"status": true}` |
-| `/api/movies`, `/api/movies/*` | Movies Service с вероятностью `MOVIES_MIGRATION_PERCENT` %, иначе монолит; при `GRADUAL_MIGRATION=false` — всегда Movies Service |
-| `/api/events/*` | Events Service |
-| всё остальное | монолит |
+| `/health` | proxy отвечает сам: `{"status": true}` |
+| `/api/movies`, `/api/movies/*` | при `GRADUAL_MIGRATION=true` в movies-service уходит `MOVIES_MIGRATION_PERCENT` % запросов, остальные в монолит; при `false` все запросы в movies-service |
+| `/api/events/*` | events-service |
+| остальные | монолит |
 
-- Процент ограничен диапазоном 0–100, сервис выбирается случайно для каждого запроса.
-- Каждый запрос пишется в лог (`GET /api/movies -> movies-service`), в ответ добавляется заголовок `X-Routed-To` — по нему видно, какой сервис ответил.
-- Проверка постепенного перехода: изменить `MOVIES_MIGRATION_PERCENT` в `docker-compose.yml`, выполнить `docker compose up -d proxy-service` и посмотреть распределение в `docker compose logs proxy-service`. При 0 все запросы уходят в монолит, при 100 — в Movies Service, при 50 — примерно поровну.
+Сервис для каждого запроса выбирается случайно, процент ограничен диапазоном 0–100. Proxy пишет в лог, куда отправлен запрос (`GET /api/movies -> movies-service`), и добавляет в ответ заголовок `X-Routed-To` с именем сервиса.
 
-### Events Service — [src/microservices/events](src/microservices/events/main.go)
+Как проверить постепенный переход: поменять `MOVIES_MIGRATION_PERCENT` в `docker-compose.yml`, перезапустить `docker compose up -d proxy-service` и посмотреть `docker compose logs proxy-service`. При 0 все запросы идут в монолит, при 100 в movies-service, при 50 примерно поровну.
 
-Go + библиотека [segmentio/kafka-go](https://github.com/segmentio/kafka-go). Блок `events-service` в `docker-compose.yml` уже был в шаблоне (`PORT=8082`, `KAFKA_BROKERS=kafka:9092`), менять его не потребовалось.
+### Events
+
+Код: [src/microservices/events/main.go](src/microservices/events/main.go). Go, для Kafka библиотека [segmentio/kafka-go](https://github.com/segmentio/kafka-go). Сервис в `docker-compose.yml` уже был описан в шаблоне, менять ничего не пришлось.
+
+API:
 
 | Запрос | Ответ |
 |---|---|
 | `GET /api/events/health` | 200 `{"status": true}` |
-| `POST /api/events/movie` | событие в топик `movie-events`, 201 `{"status": "success", "event": {...}}` |
-| `POST /api/events/user` | то же, топик `user-events` |
-| `POST /api/events/payment` | то же, топик `payment-events` |
-| неизвестный тип / битый JSON / Kafka недоступна | 404 / 400 / 500 `{"error": "..."}` |
+| `POST /api/events/movie` | пишет событие в топик `movie-events`, 201 `{"status": "success", "event": {...}}` |
+| `POST /api/events/user` | топик `user-events` |
+| `POST /api/events/payment` | топик `payment-events` |
 
-Как работает:
+Если тип события неизвестен, будет 404, если в теле некорректный JSON, 400, если Kafka недоступна, 500.
 
-1. **Producer.** Обработчик заворачивает тело запроса в конверт `{id, type, timestamp, payload}` (схема `Event` из `api-specification.yaml`) и отправляет в топик своего типа; ответ 201 возвращается после подтверждения записи от Kafka (`RequiredAcks: RequireOne`).
-2. **Consumer.** При старте сервис запускает по читателю на каждый из трёх топиков в consumer group `events-service` и пишет каждое прочитанное событие в лог. Благодаря группе Kafka хранит позицию чтения: после перезапуска старые события не обрабатываются повторно.
-3. **Устойчивость к старту.** В compose Kafka может подняться позже сервиса; при ошибке чтения consumer ждёт 5 с и повторяет, отдельный healthcheck не нужен.
+Тело запроса кладётся в `payload` события вида `{id, type, timestamp, payload}`, как в схеме `Event` из `api-specification.yaml`. Producer отправляет его в топик и ждёт подтверждения от Kafka, только после этого сервис отвечает 201.
 
-В логе (`docker compose logs events-service`) каждое событие даёт пару строк с одинаковым `id` — сервис сам публикует событие и сам же его читает:
+Consumer: при старте запускаются три читателя, по одному на топик, в группе `events-service`. Каждое прочитанное событие пишется в лог. Kafka запоминает позицию группы, поэтому после перезапуска сервиса старые события повторно не читаются. Если Kafka ещё не поднялась, читатель ждёт 5 секунд и пробует снова.
+
+Пример лога (`docker compose logs events-service`), по одинаковому `id` видно, что событие отправлено и тут же прочитано:
 
 ```
 ОТПРАВЛЕНО в movie-events: {"id":"movie-1792005517135567369","payload":{...},"timestamp":"...","type":"movie"}
 ПРОЧИТАНО из movie-events: {"id":"movie-1792005517135567369","payload":{...},"timestamp":"...","type":"movie"}
 ```
+
 <img width="2221" height="617" alt="image" src="https://github.com/user-attachments/assets/73f8ba03-8707-4ead-af2d-a9477599d3e3" />
 <img width="2548" height="554" alt="image" src="https://github.com/user-attachments/assets/9cfecc7e-234d-4308-8526-f1be151593b3" />
-
 
 
 # Задание 3
