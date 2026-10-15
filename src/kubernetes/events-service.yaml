@@ -22,7 +22,7 @@ spec:
     spec:
       containers:
       - name: event-service
-        image: ghcr.io/Lyamin-av/architecture-cinemaabyss/event-service:latest
+        image: ghcr.io/lyamin-av/architecture-cinemaabyss/event-service:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 8081
