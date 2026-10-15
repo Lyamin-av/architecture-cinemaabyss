@@ -22,7 +22,7 @@ spec:
     spec:
       containers:
       - name: proxy-service
-        image: ghcr.io/Lyamin-av/architecture-cinemaabyss/proxy-service:latest
+        image: ghcr.io/lyamin-av/architecture-cinemaabyss/proxy-service:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 8081
