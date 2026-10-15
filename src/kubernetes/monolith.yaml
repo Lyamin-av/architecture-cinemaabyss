@@ -22,7 +22,7 @@ spec:
     spec:
       containers:
       - name: monolith
-        image:  ghcr.io/Lyamin-av/architecture-cinemaabyss/monolith:latest
+        image: ghcr.io/lyamin-av/architecture-cinemaabyss/monolith:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 8080
