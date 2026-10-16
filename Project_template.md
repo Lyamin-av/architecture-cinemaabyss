@@ -388,6 +388,41 @@ cat .docker/config.json | base64
 #### Шаг 3
 Добавьте сюда скриншота вывода при вызове https://cinemaabyss.example.com/api/movies и  скриншот вывода event-service после вызова тестов.
 
+## Решение
+
+### CI/CD
+
+В `docker-build-push.yml` добавлена сборка и публикация образов events-service и proxy-service, по той же схеме, что у монолита и movies. Сборка и API-тесты запускаются и на push в ветку `cinema`, чтобы проверять работу до pull request. Все четыре образа лежат в GitHub Container Registry: `ghcr.io/lyamin-av/architecture-cinemaabyss/<сервис>:latest`.
+
+### Манифесты
+
+| Файл | Что сделано |
+|---|---|
+| `events-service.yaml` | Deployment и Service на порту 8082, адрес Kafka в `KAFKA_BROKERS`, проверки здоровья на `/api/events/health` |
+| `proxy-service.yaml` | Deployment и Service на порту 8000, настройки берёт из `cinemaabyss-config`, проверки здоровья на `/health` |
+| `configmap.yaml` | добавлен адрес `EVENTS_SERVICE_URL` для proxy |
+| `ingress.yaml` | `/` ведёт в proxy, `/api/events` в events-service |
+| `monolith.yaml`, `movies-service.yaml` | свои образы из GHCR |
+
+Proxy и events не получают пароль от базы: они с ней не работают, а proxy к тому же принимает весь внешний трафик.
+
+Секрет для скачивания образов из GHCR создан командой, а не через `dockerconfigsecret.yaml`, потому что репозиторий публичный и токен в нём был бы виден всем:
+
+```bash
+kubectl create secret docker-registry dockerconfigjson --docker-server=ghcr.io --docker-username=<логин> --docker-password=<токен> -n cinemaabyss
+```
+
+Поэтому шаг `kubectl apply -f src/kubernetes/dockerconfigsecret.yaml` пропускается.
+
+### Результат
+
+Все 7 подов запущены. Тесты `npm run test:kubernetes` прошли полностью: 22 запроса, 42 проверки, ошибок нет. Health-проверки тоже проходят, потому что proxy сам отвечает на `/health` и передаёт `/api/movies/health` в movies-service.
+
+[скриншот /api/movies]
+
+[скриншот логов events-service]
+
+
 
 # Задание 4
 Для простоты дальнейшего обновления и развертывания вам как архитектуру необходимо так же реализовать helm-чарты для прокси-сервиса и проверить работу 
