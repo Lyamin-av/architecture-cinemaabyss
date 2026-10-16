@@ -69,5 +69,4 @@ spec:
   - port: {{ .Values.proxyService.service.port }}
     targetPort: {{ .Values.proxyService.service.targetPort }}
   type: {{ .Values.proxyService.service.type }}
-    ... и тут
 {{- end }}
