@@ -495,6 +495,46 @@ minikube tunnel
 https://cinemaabyss.example.com/api/movies
 и приложите скриншот развертывания helm и вывода https://cinemaabyss.example.com/api/movies
 
+## Решение
+
+### Что изменено в чарте
+
+| Файл | Что сделано |
+|---|---|
+| `values.yaml` | свои образы из GHCR `ghcr.io/lyamin-av/architecture-cinemaabyss/<сервис>` для всех четырёх сервисов; в `imagePullSecrets.dockerconfigjson` пустое значение, настоящее передаётся при установке |
+| `templates/services/proxy-service.yaml` | Deployment и Service по манифесту из задания 3: контейнер на порту 8000, `PORT` и настройки из `cinemaabyss-config`, проверки здоровья на `/health`. Service принимает на порту 80 и передаёт на 8000, как задано в values и ingress чарта |
+| `templates/services/events-service.yaml` | Deployment и Service на порту 8082, `PORT` и `KAFKA_BROKERS=kafka:9092`, проверки здоровья на `/api/events/health` |
+| `templates/configmap.yaml` | исправлен адрес `MOVIES_SERVICE_URL` и добавлен `EVENTS_SERVICE_URL` (см. ниже) |
+
+Порты, образы и ресурсы в шаблонах берутся из `values.yaml`, а не вписаны в сами шаблоны. Чтобы обновить версию сервиса, достаточно поменять тег в values или передать его через `--set`.
+
+В шаблоне `configmap.yaml` была ошибка: `MOVIES_SERVICE_URL` указывал на `http://movies:8081`, а Service в чарте называется `movies-service`. При `moviesMigrationPercent: 100` proxy отправляет все запросы `/api/movies` в movies-service, и с неверным адресом каждый такой запрос заканчивался бы ошибкой 502. Адрес исправлен на `movies-service`, как в обычном манифесте `src/kubernetes/configmap.yaml`. Также добавлен `EVENTS_SERVICE_URL`, по которому proxy пересылает `/api/events/`.
+
+### Секрет для GHCR
+
+Задание предлагает вписать base64 секрета прямо в `values.yaml`. Репозиторий публичный, поэтому токен в нём оказался бы виден всем. Значение хранится в отдельном файле `values-secret.yaml` вне репозитория:
+
+```yaml
+imagePullSecrets:
+  dockerconfigjson: <base64 от {"auths":{"ghcr.io":{"auth":"..."}}}>
+```
+
+Оно взято из секрета, созданного в задании 3 (`kubectl get secret dockerconfigjson -o jsonpath="{.data.\.dockerconfigjson}"`). Шаблон `dockerconfigsecret.yaml` создаёт из него секрет `dockerconfigjson`, на который ссылаются все Deployment.
+
+### Установка и результат
+
+Перед установкой чарт проверен командой `helm lint` (0 ошибок). Установка из задания 3 удалена вместе с namespace, чтобы Helm создал все объекты сам и чтобы Kafka не упала с `InconsistentClusterIdException` на старом диске. Затем:
+
+```bash
+helm install cinemaabyss .\src\kubernetes\helm --namespace cinemaabyss --create-namespace -f C:\Users\PC\cinemaabyss-secrets\values-secret.yaml
+```
+
+Установка прошла (`STATUS: deployed`), все 7 подов запущены. monolith и movies-service в первые секунды по два раза перезапустились: они стартовали одновременно с PostgreSQL и не смогли сразу к нему подключиться. После того как база поднялась, оба работают без перезапусков. `http://cinemaabyss.example.com/api/movies` через ingress и proxy возвращает список фильмов из movies-service.
+
+[скриншот развертывания helm]
+
+[скриншот /api/movies]
+
 ## Удаляем все
 
 ```bash
