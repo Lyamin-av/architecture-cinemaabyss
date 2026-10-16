@@ -32,8 +32,6 @@ spec:
         envFrom:
         - configMapRef:
             name: cinemaabyss-config
-        - secretRef:
-            name: cinemaabyss-secrets
         resources:
           limits:
             cpu: "300m"
