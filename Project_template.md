@@ -531,9 +531,10 @@ helm install cinemaabyss .\src\kubernetes\helm --namespace cinemaabyss --create-
 
 Установка прошла (`STATUS: deployed`), все 7 подов запущены. monolith и movies-service в первые секунды по два раза перезапустились: они стартовали одновременно с PostgreSQL и не смогли сразу к нему подключиться. После того как база поднялась, оба работают без перезапусков. `http://cinemaabyss.example.com/api/movies` через ingress и proxy возвращает список фильмов из movies-service.
 
-[скриншот развертывания helm]
+<img width="1100" height="1084" alt="image" src="https://github.com/user-attachments/assets/8c7eafec-8d71-4e6f-a6af-a635171777e5" />
 
-[скриншот /api/movies]
+<img width="1568" height="187" alt="image" src="https://github.com/user-attachments/assets/cc7f4eea-606d-47b9-a7bb-260ed77123f2" />
+
 
 ## Удаляем все
 
