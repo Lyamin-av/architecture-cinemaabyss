@@ -1,0 +1,135 @@
+@startuml cinemaabyss-scenario-mobile
+' C4 Dynamic (sequence) — Кинобездна, To-Be
+' Сценарий: мобильное приложение → регистрация → вход → рекомендации → покупка подписки → просмотр платного фильма
+!include <C4/C4_Sequence>
+
+SHOW_INDEX()
+AddRelTag("async", $lineStyle = DashedLine())
+skinparam wrapWidth 180
+skinparam maxMessageSize 220
+
+title Кинобездна — To-Be: сценарий «мобильное приложение: от регистрации до просмотра платного фильма»
+
+Person(user, "Пользователь")
+Container(mobile, "Мобильное приложение", "Kotlin / Swift")
+Container(gateway, "API Gateway", "Go")
+Container(bff, "Mobile BFF", "Go")
+Container(auth, "Auth Service", "Go")
+Container(user_svc, "User Service", "Go")
+Container(rec_adapter, "Recommendations Adapter", "Go")
+Container(movies, "Movies Service", "Go")
+Container(subscription, "Subscription Service", "Go")
+Container(payment, "Payment Service", "Go")
+Container(playback, "Playback Service", "Go")
+ContainerQueue(kafka, "Kafka", "Apache Kafka")
+ContainerDb(media, "Медиахранилище", "S3 (MinIO)")
+System_Ext(payment_ext, "Платёжная система")
+System_Ext(cinemas_ext, "Онлайн кинотеатр (CDN партнёра)")
+System_Ext(open_ext, "Открытые источники контента")
+
+== 0. Подготовка каталога (фоново, до сценария) ==
+Rel(movies, cinemas_ext, "Запросить каталог партнёра", "HTTPS/REST")
+Rel(cinemas_ext, movies, "Карточки фильмов (метаданные, внешний id); видео остаётся у партнёра")
+Rel(movies, open_ext, "Скачать фильм из открытого источника", "HTTPS")
+Rel(open_ext, movies, "Видеофайл и описание")
+Rel(movies, media, "Сохранить видео и постер открытого фильма", "S3 API")
+Rel(movies, kafka, "Сохраняет карточки; FilmAdded {film_id, пакет, источник} (через outbox): партнёрский — пакет тарифа, источник «партнёр + внешний id»; открытый — пакет «Бесплатный», источник «наш S3»", "movie-events", $tags="async")
+Rel(kafka, playback, "FilmAdded → обновить копию film_id → пакет, источник", $tags="async")
+Rel(kafka, rec_adapter, "FilmAdded → передать вендору данные о фильме", $tags="async")
+
+== 1. Регистрация ==
+Rel(user, mobile, "Вводит email и пароль")
+Rel(mobile, gateway, "POST /auth/register", "HTTPS/REST")
+Rel(gateway, bff, "Открытый маршрут, без JWT")
+Rel(bff, auth, "Создать учётную запись и выдать токены", "HTTPS/REST")
+Rel(auth, kafka, "UserRegistered (через outbox)", "user-events", $tags="async")
+Rel(auth, mobile, "Ответ на шаг 12: user_id, access-токен (JWT), refresh-токен (через BFF и Gateway)")
+Rel(kafka, user_svc, "UserRegistered → создать профиль", $tags="async")
+Rel(kafka, rec_adapter, "UserRegistered → передать вендору (обезличенно)", $tags="async")
+
+== 2. Аутентификация (повторный вход) ==
+Rel(mobile, gateway, "POST /auth/login", "HTTPS/REST")
+Rel(gateway, bff, "Открытый маршрут")
+Rel(bff, auth, "Проверить пароль, выдать access (JWT) и refresh", "HTTPS/REST")
+Rel(auth, kafka, "UserLoggedIn (через outbox)", "user-events", $tags="async")
+Rel(auth, mobile, "Ответ на шаг 19: access-токен (JWT), refresh-токен (через BFF и Gateway)")
+Rel(gateway, gateway, "Дальше каждый запрос: проверка access-токена (JWT) по кэшу JWKS, user_id → BFF; истёк → обмен refresh на новую пару в Auth")
+
+== 3. Рекомендации ==
+Rel(mobile, gateway, "GET /home (JWT)", "HTTPS/REST")
+Rel(gateway, bff, "user_id")
+Rel(bff, rec_adapter, "Подборка для user_id", "HTTPS/REST")
+Rel(rec_adapter, bff, "Персональной ещё нет → «популярное» по playback-events")
+Rel(bff, movies, "Метаданные фильмов для отображения (пакетно)", "HTTPS/REST")
+Rel(movies, bff, "Названия, описания, жанры, ссылки на постеры")
+Rel(bff, playback, "Доступность фильмов [A, B, …] для user_id (пакетно)", "HTTPS/REST")
+Rel(playback, playback, "Пакеты фильмов и пакеты пользователя — из локальных копий (заполнены на шаге 7 и по subscription-events)")
+opt Фильма нет в копии (добавлен только что, событие ещё не обработано)
+Rel(playback, movies, "Пакеты и источники недостающих фильмов (пакетно)", "HTTPS/REST")
+Rel(movies, playback, "Пакеты и источники; Playback дописывает их в копию")
+end
+Rel(playback, bff, "A — доступно, B — нужен тариф с пакетом «Премиум»")
+Rel(bff, mobile, "Экран подборки: постеры, пометки «входит в подписку» / «нужна подписка»")
+
+== 4. Покупка подписки ==
+Rel(mobile, gateway, "POST /subscriptions {тариф X} (JWT)", "HTTPS/REST")
+Rel(gateway, bff, "user_id")
+Rel(bff, subscription, "Оформить тариф X", "HTTPS/REST")
+Rel(subscription, subscription, "Подписка в статусе «ожидает оплаты», цена со скидкой")
+Rel(subscription, payment, "Создать платёж {subscription_id, сумма}", "HTTPS/REST")
+Rel(payment, payment_ext, "Создать платёж", "HTTPS")
+Rel(payment_ext, payment, "id платежа у провайдера, ссылка на страницу оплаты")
+Rel(payment, mobile, "Ссылка на оплату (через Subscription, BFF, Gateway)")
+Rel(user, payment_ext, "Подтверждает оплату на странице провайдера (3-D Secure)")
+Rel(payment_ext, gateway, "Вебхук: оплата прошла", "HTTPS")
+Rel(gateway, payment, "Вебхук (подпись провайдера проверена)", "HTTPS")
+Rel(payment, kafka, "PaymentSucceeded {subscription_id} (через outbox)", "payment-events", $tags="async")
+Rel(kafka, subscription, "PaymentSucceeded → активировать (идемпотентно по payment_id)", $tags="async")
+Rel(subscription, kafka, "SubscriptionActivated {user_id, пакеты} (через outbox)", "subscription-events", $tags="async")
+Rel(kafka, playback, "Обновить копию пакетов пользователя", $tags="async")
+Rel(mobile, subscription, "Опрос статуса подписки (через Gateway и BFF)", "HTTPS/REST")
+Rel(subscription, mobile, "«Активна», тариф X, срок действия (через BFF и Gateway)")
+
+== 5. Просмотр фильма (платного от партнёра или открытого из нашего S3) ==
+Rel(mobile, gateway, "POST /playback {film_id} (JWT)", "HTTPS/REST")
+Rel(gateway, bff, "user_id")
+Rel(bff, playback, "Ссылка на просмотр film_id", "HTTPS/REST")
+Rel(playback, playback, "Пакеты пользователя из локальной копии (обновлена на шаге 49)")
+opt Записи нет или подписка неактивна (событие об оплате ещё не дошло)
+Rel(playback, subscription, "Перепроверить статус и пакеты пользователя", "HTTPS/REST")
+Rel(subscription, playback, "Статус и пакеты; Playback обновляет копию")
+end
+Rel(playback, playback, "Пакет и источник фильма из локальной копии")
+opt Фильма нет в копии
+Rel(playback, movies, "Пакет и источник фильма", "HTTPS/REST")
+Rel(movies, playback, "Пакет и источник; Playback дописывает в копию")
+end
+Rel(playback, playback, "То же правило, что при пометках в каталоге: пакет фильма входит в пакеты пользователя или это пакет «Бесплатный» → доступ разрешён")
+alt Источник — партнёр (платный фильм)
+Rel(playback, cinemas_ext, "Запросить подписанную ссылку на поток (по внешнему id из копии)", "HTTPS/REST")
+Rel(cinemas_ext, playback, "Подписанная временная ссылка на поток (HLS / DASH)")
+else Источник — наш S3 (открытый контент)
+Rel(playback, media, "Сформировать presigned URL на видео (временный)", "S3 API")
+end
+Rel(playback, kafka, "PlaybackStarted", "playback-events", $tags="async")
+Rel(playback, mobile, "Ссылка на поток (через BFF и Gateway)")
+alt Источник — партнёр
+Rel(mobile, cinemas_ext, "Видеопоток напрямую с CDN партнёра", "HTTPS (HLS / DASH)")
+else Источник — наш S3
+Rel(mobile, media, "Видеопоток из нашего медиахранилища (через CDN)", "HTTPS (HLS / DASH)")
+end
+Rel(kafka, rec_adapter, "PlaybackStarted → данные вендору и «популярное»", $tags="async")
+
+skinparam legendFontColor #333333
+skinparam legendBackgroundColor #F5F5F5
+skinparam legendBorderColor #999999
+legend right
+  В квадратных скобках — протокол; имя топика (user-events и т. п.) — асинхронно через Kafka
+  Стрелки «через BFF и Gateway» — ответ, проходящий обратно по той же цепочке
+  Ответ показан у каждого синхронного вызова, который возвращает данные
+  Без автопродления: подписка на срок, «истекла» Subscription публикует по расписанию
+  Блоки opt — запасной путь, выполняется только при условии; в основном сценарии не срабатывает
+  Блоки alt — развилка по источнику фильма; пакет «Бесплатный» (открытый контент) доступен любому вошедшему пользователю
+endlegend
+
+@enduml

@@ -1,0 +1,71 @@
+@startuml cinemaabyss-transition-stage1
+' C4 Container diagram — Кинобездна, переходное состояние (этап 1, Strangler Fig)
+' Целевое состояние: cinemaabyss-to-be-containers.puml
+!include <C4/C4_Container>
+
+LAYOUT_TOP_DOWN()
+skinparam ranksep 70
+skinparam nodesep 50
+skinparam wrapWidth 240
+AddRelTag("async", $lineStyle = DashedLine(), $legendText = "асинхронно")
+AddRelTag("transitional", $lineColor = "#C0392B", $textColor = "#C0392B", $legendText = "переходная связь, будет убрана")
+
+title Кинобездна — переходное состояние, этап 1: Strangler Fig (вынесен Movies Service)
+
+Person(user, "Пользователь", "Смотрит фильмы с ноутбука, телефона или Smart TV")
+
+System_Boundary(cinemaabyss, "Кинобездна") {
+  Container(clients, "Клиентские приложения", "Web / Mobile / Smart TV", "Без изменений: ходят на тот же REST API, но через новый шлюз")
+
+  Boundary(k8s, "Kubernetes (Helm)") {
+    Container(proxy, "API Gateway (proxy)", "Go", "Strangler Fig: /api/movies делится между Movies Service и монолитом по флагу GRADUAL_MIGRATION и проценту MOVIES_MIGRATION_PERCENT; остальные запросы — в монолит")
+    Container(monolith, "Монолит", "Go", "Пользователи, платежи, подписки и остальное, что ещё не вынесено. Выводится по частям")
+    Container(movies, "Movies Service", "Go", "Первый вынесенный сервис: метаданные фильмов")
+    Container(events_svc, "Events Service", "Go", "MVP: REST API для событий user / payment / movie; публикует в Kafka и читает их (логирует)")
+    ContainerQueue(kafka, "Kafka", "Apache Kafka", "Топики movie-events, user-events, payment-events")
+    ContainerDb(shared_db, "Общая БД", "PostgreSQL", "БД монолита: users, movies, payments, subscriptions…")
+    ContainerDb(s3, "S3", "Объектное хранилище", "Файлы")
+  }
+}
+
+System_Ext(payment_ext, "Платёжная система", "")
+System_Ext(cinemas_ext, "Онлайн кинотеатры", "")
+Boundary(rec_vendor, "Вендор рекомендаций", "Внешняя система") {
+  ContainerQueue_Ext(rabbitmq, "RabbitMQ", "AMQP", "")
+  System_Ext(rec_ext, "Рекомендательная система", "")
+}
+
+Rel(user, clients, "Использует")
+Rel(clients, proxy, "API", "HTTPS/REST")
+
+Rel(proxy, movies, "/api/movies — доля N %", "HTTP")
+Rel(proxy, monolith, "Остальные запросы; /api/movies — доля 100 − N %", "HTTP", $tags="transitional")
+
+Rel(movies, shared_db, "Читает и пишет метаданные (пока общая БД)", "SQL", $tags="transitional")
+Rel(monolith, shared_db, "Читает и пишет", "SQL")
+Rel(monolith, s3, "Файлы", "S3 API")
+
+Rel(monolith, events_svc, "Отправляет события", "HTTPS/REST")
+Rel(events_svc, kafka, "Публикует", "Kafka", $tags="async")
+Rel(kafka, events_svc, "Читает и логирует", "Kafka", $tags="async")
+
+Rel(monolith, payment_ext, "Платежи", "HTTPS")
+Rel(monolith, cinemas_ext, "Контент", "HTTPS")
+BiRel(monolith, rabbitmq, "События / подборки", "AMQP", $tags="async")
+BiRel(rabbitmq, rec_ext, "", "AMQP", $tags="async")
+
+skinparam legendFontColor #333333
+skinparam legendBackgroundColor #F5F5F5
+skinparam legendBorderColor #999999
+legend right
+  <b>Красные связи</b> — переходные, исчезают на следующих этапах
+  Пунктир — асинхронно
+  ----
+  <b>Дальше:</b>
+  2. Movies Service — своя БД (перенос данных через CDC / outbox), N = 100 %
+  3. Auth + User Service, Subscription + Payment Service
+  4. Playback Service, Recommendations Adapter (RabbitMQ уходит из монолита)
+  5. Монолит выключен → целевое состояние (To-Be)
+endlegend
+
+@enduml

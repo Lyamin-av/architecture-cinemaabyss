@@ -5,7 +5,70 @@
 1. Спроектируйте to be архитектуру КиноБездны, разделив всю систему на отдельные домены и организовав интеграционное взаимодействие и единую точку вызова сервисов.
 Результат представьте в виде контейнерной диаграммы в нотации С4.
 Добавьте ссылку на файл в этот шаблон
-[ссылка на файл](ссылка)
+[ссылка на файл](docs/architecture/to-be-containers.puml)
+
+## Решение
+
+Все диаграммы — C4-PlantUML (стандартная библиотека PlantUML, `!include <C4/...>`), рядом с исходником лежит отрисованный PNG.
+
+| Диаграмма | Исходник | Картинка |
+|---|---|---|
+| **To-Be: диаграмма контейнеров (основной результат)** | [to-be-containers.puml](docs/architecture/to-be-containers.puml) | [PNG](docs/architecture/to-be-containers.png) |
+| Поток событий через Kafka (детализация асинхронного взаимодействия) | [event-flow.puml](docs/architecture/event-flow.puml) | [PNG](docs/architecture/event-flow.png) |
+| Сценарий мобильного пользователя: подготовка каталога → регистрация → вход → рекомендации → покупка подписки → просмотр платного фильма партнёра или открытого из нашего S3 (C4 Dynamic) | [scenario-mobile.puml](docs/architecture/scenario-mobile.puml) | [PNG](docs/architecture/scenario-mobile.png) |
+| Переходное состояние, этап 1: Strangler Fig | [transition-stage1.puml](docs/architecture/transition-stage1.puml) | [PNG](docs/architecture/transition-stage1.png) |
+
+![To-Be: диаграмма контейнеров](docs/architecture/to-be-containers.png)
+
+### Домены и сервисы
+
+| Сервис | Ответственность | Хранилище |
+|---|---|---|
+| Auth Service | Регистрация, вход, учётные данные; выпуск access-токена (JWT) и refresh-токена с ротацией; ключи JWKS | PostgreSQL |
+| User Service | Профиль, настройки, «Избранное»; профиль создаётся по событию регистрации | PostgreSQL |
+| Movies Service | Каталог: карточки фильмов (метаданные, жанры, оценки, пакет доступа, источник — партнёр и внешний id или наш S3); импорт каталога партнёров, загрузка контента открытых источников. Видео партнёров не хранит | PostgreSQL + S3 (медиа) |
+| Subscription Service | Тарифы и входящие в них пакеты, подписки, скидки, промокоды; сага оформления | PostgreSQL |
+| Payment Service | Платежи и возвраты, интеграция с платёжной системой, приём вебхуков, сверка статусов | PostgreSQL |
+| Playback Service | Права доступа к контенту (доступность фильмов для каталога и проверка перед просмотром), выдача ссылки на поток | PostgreSQL (копии пакетов пользователей и фильмов) |
+| Recommendations Adapter | Anti-corruption layer к внешней рекомендательной системе, хранение подборок | PostgreSQL |
+| Events Service | REST-шлюз событий для монолита (на время миграции) и внешних интеграций; MVP задания 2 | — |
+
+### Единая точка вызова
+
+- **API Gateway** — единственный вход снаружи: TLS, проверка JWT (локально, по кэшированным ключам JWKS из Auth), rate limiting, маршрутизация, приём вебхуков платёжной системы.
+- **Токены.** Auth выдаёт пару: access-токен в формате JWT (~15 мин, подписан закрытым ключом Auth, содержит только `user_id` и служебные поля) и refresh-токен (случайная строка, хэш хранится в БД Auth, ротация при каждом обмене, повторное предъявление → отзыв цепочки). Gateway проверяет access локально по открытым ключам JWKS, не обращаясь к Auth; истёкший access клиент меняет на новую пару по refresh. Тариф и пакеты в токен не кладутся — права на контент проверяет Playback по актуальным данным подписки.
+- **BFF** — отдельный на каждый тип клиента (Web / Mobile / Smart TV): разные интерфейсы и объём данных, агрегация ответов нескольких сервисов. На диаграмме показан одним блоком, чтобы не дублировать связи.
+
+### Интеграционное взаимодействие
+
+- **Синхронно (REST)** — путь пользователя: клиент → Gateway → BFF → сервисы. Kafka не используется для ответа пользователю.
+- **Асинхронно (Kafka)** — доменные события между сервисами: `user-events`, `movie-events`, `payment-events`, `subscription-events`, `playback-events`; retry-топики и DLQ; контракты событий — в Schema Registry. Kafka — единственная внутренняя шина.
+- **Outbox** у всех сервисов, публикующих события по изменению своей БД: запись и событие сохраняются в одной транзакции, затем событие уходит в Kafka. Потребители идемпотентны.
+- **Внешние системы**: платёжная система (создание платежей, вебхуки, сверка), онлайн-кинотеатры (импорт каталога, подписанные ссылки на поток), открытые источники контента, вендор рекомендаций (асинхронно через его RabbitMQ — часть внешнего контракта, не наша инфраструктура).
+
+### Ключевые решения
+
+1. **Своя БД у каждого сервиса.** Общая БД монолита — только переходный этап.
+2. **Подписки отдельно от платежей.** Подписка — права доступа (частое чтение), может возникать без оплаты (промокод, пробный период); платёж — деньги. Связь через `payment-events`.
+3. **Сага оформления подписки (хореография):** Subscription создаёт подписку «ожидает оплаты» и вызывает Payment → пользователь платит на странице провайдера → вебхук → `PaymentSucceeded` → подписка активирована. Отказ или таймаут → подписка отменена. Payment сверяет незавершённые платежи с провайдером. Автопродления нет: подписка на срок, по истечении Subscription публикует «истекла».
+4. **Права на контент.** Соответствие «тариф → пакеты» хранит Subscription и публикует пакеты пользователя в `subscription-events`; Movies хранит пакет каждого фильма; Playback проверяет, что пакет фильма входит в пакеты пользователя. Открытый контент (из открытых источников, хранится в нашем S3) входит в пакет «Бесплатный» и доступен любому вошедшему пользователю без подписки. Playback — **единственное место** этого правила: и пометки «входит в подписку» в каталоге (BFF запрашивает у Playback доступность списка фильмов), и решение при нажатии «Смотреть». Так экран и просмотр не могут разойтись, а показ каталога не нагружает Subscription.
+5. **Playback не зависит от Subscription и Movies на горячем пути:** держит локальные копии «пользователь → пакеты» из `subscription-events` и «фильм → пакет и источник» из `movie-events` (топики с ключом и compaction — копии можно восстановить перечитыванием). Изменения подписки или пакета фильма доходят за секунды, без TTL. Если записи нет (только что оплатил, фильм только что добавлен) или подписка неактивна — синхронный запрос к владельцу данных (Subscription / Movies).
+6. **Видео не идёт через наш кластер:** Playback выдаёт подписанную временную ссылку, клиент смотрит напрямую с CDN партнёра или из нашего S3.
+7. **Рекомендации асинхронно** (условие кейса). Подборки хранятся у нас, сбой вендора не влияет на пользователя; для новых пользователей — «популярное» по `playback-events`.
+8. **Отказались от центрального сервиса событий** (всё через Events Service): единая точка отказа, невозможен outbox, потребителям всё равно нужны consumer groups и replay. Единообразие обеспечивают общая Go-библиотека, Schema Registry и соглашения по событиям.
+9. **Auth и User разделены по ответственности:** личность и токены — Auth, профиль — User. Keycloak рассмотрен и отклонён: ещё одно Java-приложение со своей БД при двух DevOps и сложная миграция паролей.
+10. **Технологии:** все сервисы на Go (команда — Go-разработчики); PostgreSQL для всех хранилищ, без Redis — меньше технологий в эксплуатации.
+
+### Переход без простоя
+
+Монолита на To-Be нет — это целевое состояние. Путь к нему — Strangler Fig, показан на [диаграмме переходного состояния](docs/architecture/transition-stage1.puml): API Gateway (proxy) делит трафик `/api/movies` между монолитом и Movies Service по фиче-флагу и проценту миграции, монолит отправляет события через Events Service в Kafka, всё развёрнуто в Kubernetes через Helm. Дальнейшие этапы: своя БД Movies (CDC / outbox) → Auth и User, Subscription и Payment → Playback и Recommendations Adapter → отключение монолита.
+
+### Допущения
+
+- Оплата подтверждается на веб-странице платёжного провайдера; биллинг App Store / Google Play — отдельная интеграция в будущем.
+- Подборки от вендора возвращаются через его RabbitMQ.
+- Уведомления (email / push) в текущий объём не входят.
+- Раздача открытого контента из нашего S3 идёт через CDN перед хранилищем; на схеме CDN не детализирован.
 
 # Задание 2
 
@@ -57,7 +120,57 @@
     - Добавьте в docker-compose новый сервис, kafka там уже есть
 
 Необходимые тесты для проверки этого API вызываются при запуске npm run test:local из папки tests/postman 
-Приложите скриншот тестов и скриншот состояния топиков Kafka из UI http://localhost:8090 
+Приложите скриншот тестов и скриншот состояния топиков Kafka из UI http://localhost:8090
+
+
+## Решение
+
+### Proxy
+
+Код: [src/microservices/proxy/main.go](src/microservices/proxy/main.go). Написан на Go без внешних библиотек, проксирование через `httputil.ReverseProxy`.
+
+Маршрутизация:
+
+| Путь | Сервис |
+|---|---|
+| `/health` | proxy отвечает сам: `{"status": true}` |
+| `/api/movies`, `/api/movies/*` | при `GRADUAL_MIGRATION=true` в movies-service уходит `MOVIES_MIGRATION_PERCENT` % запросов, остальные в монолит; при `false` все запросы в movies-service |
+| `/api/events/*` | events-service |
+| остальные | монолит |
+
+Сервис для каждого запроса выбирается случайно, процент ограничен диапазоном 0–100. Proxy пишет в лог, куда отправлен запрос (`GET /api/movies -> movies-service`), и добавляет в ответ заголовок `X-Routed-To` с именем сервиса.
+
+Как проверить постепенный переход: поменять `MOVIES_MIGRATION_PERCENT` в `docker-compose.yml`, перезапустить `docker compose up -d proxy-service` и посмотреть `docker compose logs proxy-service`. При 0 все запросы идут в монолит, при 100 в movies-service, при 50 примерно поровну.
+
+### Events
+
+Код: [src/microservices/events/main.go](src/microservices/events/main.go). Go, для Kafka библиотека [segmentio/kafka-go](https://github.com/segmentio/kafka-go). Сервис в `docker-compose.yml` уже был описан в шаблоне, менять ничего не пришлось.
+
+API:
+
+| Запрос | Ответ |
+|---|---|
+| `GET /api/events/health` | 200 `{"status": true}` |
+| `POST /api/events/movie` | пишет событие в топик `movie-events`, 201 `{"status": "success", "event": {...}}` |
+| `POST /api/events/user` | топик `user-events` |
+| `POST /api/events/payment` | топик `payment-events` |
+
+Если тип события неизвестен, будет 404, если в теле некорректный JSON, 400, если Kafka недоступна, 500.
+
+Тело запроса кладётся в `payload` события вида `{id, type, timestamp, payload}`, как в схеме `Event` из `api-specification.yaml`. Producer отправляет его в топик и ждёт подтверждения от Kafka, только после этого сервис отвечает 201.
+
+Consumer: при старте запускаются три читателя, по одному на топик, в группе `events-service`. Каждое прочитанное событие пишется в лог. Kafka запоминает позицию группы, поэтому после перезапуска сервиса старые события повторно не читаются. Если Kafka ещё не поднялась, читатель ждёт 5 секунд и пробует снова.
+
+Пример лога (`docker compose logs events-service`), по одинаковому `id` видно, что событие отправлено и тут же прочитано:
+
+```
+ОТПРАВЛЕНО в movie-events: {"id":"movie-1792005517135567369","payload":{...},"timestamp":"...","type":"movie"}
+ПРОЧИТАНО из movie-events: {"id":"movie-1792005517135567369","payload":{...},"timestamp":"...","type":"movie"}
+```
+
+<img width="2221" height="617" alt="image" src="https://github.com/user-attachments/assets/73f8ba03-8707-4ead-af2d-a9477599d3e3" />
+<img width="2548" height="554" alt="image" src="https://github.com/user-attachments/assets/9cfecc7e-234d-4308-8526-f1be151593b3" />
+
 
 # Задание 3
 
@@ -275,6 +388,38 @@ cat .docker/config.json | base64
 #### Шаг 3
 Добавьте сюда скриншота вывода при вызове https://cinemaabyss.example.com/api/movies и  скриншот вывода event-service после вызова тестов.
 
+## Решение
+
+### CI/CD
+
+В `docker-build-push.yml` добавлена сборка и публикация образов events-service и proxy-service, по той же схеме, что у монолита и movies. Сборка и API-тесты запускаются и на push в ветку `cinema`, чтобы проверять работу до pull request. Все четыре образа лежат в GitHub Container Registry: `ghcr.io/lyamin-av/architecture-cinemaabyss/<сервис>:latest`.
+
+### Манифесты
+
+| Файл | Что сделано |
+|---|---|
+| `events-service.yaml` | Deployment и Service на порту 8082, адрес Kafka в `KAFKA_BROKERS`, проверки здоровья на `/api/events/health` |
+| `proxy-service.yaml` | Deployment и Service на порту 8000, настройки берёт из `cinemaabyss-config`, проверки здоровья на `/health` |
+| `configmap.yaml` | добавлен адрес `EVENTS_SERVICE_URL` для proxy |
+| `ingress.yaml` | `/` ведёт в proxy, `/api/events` в events-service |
+| `monolith.yaml`, `movies-service.yaml` | свои образы из GHCR |
+
+Секрет для скачивания образов из GHCR создан командой, а не через `dockerconfigsecret.yaml`, потому что репозиторий публичный и токен в нём был бы виден всем:
+
+```bash
+kubectl create secret docker-registry dockerconfigjson --docker-server=ghcr.io --docker-username=<логин> --docker-password=<токен> -n cinemaabyss
+```
+
+### Результат
+
+Все 7 подов запущены. Тесты `npm run test:kubernetes` прошли полностью: 22 запроса, 42 проверки, ошибок нет. Health-проверки тоже проходят, потому что proxy сам отвечает на `/health` и передаёт `/api/movies/health` в movies-service.
+
+<img width="1568" height="740" alt="image" src="https://github.com/user-attachments/assets/27ba99b5-8c2d-4820-8c9e-fc309117cb67" />
+
+<img width="1112" height="624" alt="image" src="https://github.com/user-attachments/assets/12ae66eb-d56f-4b83-a655-ee1b59edc9f7" />
+
+
+
 
 # Задание 4
 Для простоты дальнейшего обновления и развертывания вам как архитектуру необходимо так же реализовать helm-чарты для прокси-сервиса и проверить работу 
@@ -349,6 +494,47 @@ minikube tunnel
 Потом вызовите 
 https://cinemaabyss.example.com/api/movies
 и приложите скриншот развертывания helm и вывода https://cinemaabyss.example.com/api/movies
+
+## Решение
+
+### Что изменено в чарте
+
+| Файл | Что сделано |
+|---|---|
+| `values.yaml` | свои образы из GHCR `ghcr.io/lyamin-av/architecture-cinemaabyss/<сервис>` для всех четырёх сервисов; в `imagePullSecrets.dockerconfigjson` пустое значение, настоящее передаётся при установке |
+| `templates/services/proxy-service.yaml` | Deployment и Service по манифесту из задания 3: контейнер на порту 8000, `PORT` и настройки из `cinemaabyss-config`, проверки здоровья на `/health`. Service принимает на порту 80 и передаёт на 8000, как задано в values и ingress чарта |
+| `templates/services/events-service.yaml` | Deployment и Service на порту 8082, `PORT` и `KAFKA_BROKERS=kafka:9092`, проверки здоровья на `/api/events/health` |
+| `templates/configmap.yaml` | исправлен адрес `MOVIES_SERVICE_URL` и добавлен `EVENTS_SERVICE_URL` (см. ниже) |
+
+Порты, образы и ресурсы в шаблонах берутся из `values.yaml`, а не вписаны в сами шаблоны. Чтобы обновить версию сервиса, достаточно поменять тег в values или передать его через `--set`.
+
+В шаблоне `configmap.yaml` была ошибка: `MOVIES_SERVICE_URL` указывал на `http://movies:8081`, а Service в чарте называется `movies-service`. При `moviesMigrationPercent: 100` proxy отправляет все запросы `/api/movies` в movies-service, и с неверным адресом каждый такой запрос заканчивался бы ошибкой 502. Адрес исправлен на `movies-service`, как в обычном манифесте `src/kubernetes/configmap.yaml`. Также добавлен `EVENTS_SERVICE_URL`, по которому proxy пересылает `/api/events/`.
+
+### Секрет для GHCR
+
+Задание предлагает вписать base64 секрета прямо в `values.yaml`. Репозиторий публичный, поэтому токен в нём оказался бы виден всем. Значение хранится в отдельном файле `values-secret.yaml` вне репозитория:
+
+```yaml
+imagePullSecrets:
+  dockerconfigjson: <base64 от {"auths":{"ghcr.io":{"auth":"..."}}}>
+```
+
+Оно взято из секрета, созданного в задании 3 (`kubectl get secret dockerconfigjson -o jsonpath="{.data.\.dockerconfigjson}"`). Шаблон `dockerconfigsecret.yaml` создаёт из него секрет `dockerconfigjson`, на который ссылаются все Deployment.
+
+### Установка и результат
+
+Перед установкой чарт проверен командой `helm lint` (0 ошибок). Установка из задания 3 удалена вместе с namespace, чтобы Helm создал все объекты сам и чтобы Kafka не упала с `InconsistentClusterIdException` на старом диске. Затем:
+
+```bash
+helm install cinemaabyss .\src\kubernetes\helm --namespace cinemaabyss --create-namespace -f C:\Users\PC\cinemaabyss-secrets\values-secret.yaml
+```
+
+Установка прошла (`STATUS: deployed`), все 7 подов запущены. monolith и movies-service в первые секунды по два раза перезапустились: они стартовали одновременно с PostgreSQL и не смогли сразу к нему подключиться. После того как база поднялась, оба работают без перезапусков. `http://cinemaabyss.example.com/api/movies` через ingress и proxy возвращает список фильмов из movies-service.
+
+<img width="1100" height="1084" alt="image" src="https://github.com/user-attachments/assets/8c7eafec-8d71-4e6f-a6af-a635171777e5" />
+
+<img width="1568" height="187" alt="image" src="https://github.com/user-attachments/assets/cc7f4eea-606d-47b9-a7bb-260ed77123f2" />
+
 
 ## Удаляем все
 
