@@ -404,23 +404,20 @@ cat .docker/config.json | base64
 | `ingress.yaml` | `/` ведёт в proxy, `/api/events` в events-service |
 | `monolith.yaml`, `movies-service.yaml` | свои образы из GHCR |
 
-Proxy и events не получают пароль от базы: они с ней не работают, а proxy к тому же принимает весь внешний трафик.
-
 Секрет для скачивания образов из GHCR создан командой, а не через `dockerconfigsecret.yaml`, потому что репозиторий публичный и токен в нём был бы виден всем:
 
 ```bash
 kubectl create secret docker-registry dockerconfigjson --docker-server=ghcr.io --docker-username=<логин> --docker-password=<токен> -n cinemaabyss
 ```
 
-Поэтому шаг `kubectl apply -f src/kubernetes/dockerconfigsecret.yaml` пропускается.
-
 ### Результат
 
 Все 7 подов запущены. Тесты `npm run test:kubernetes` прошли полностью: 22 запроса, 42 проверки, ошибок нет. Health-проверки тоже проходят, потому что proxy сам отвечает на `/health` и передаёт `/api/movies/health` в movies-service.
 
-[скриншот /api/movies]
+<img width="1568" height="740" alt="image" src="https://github.com/user-attachments/assets/27ba99b5-8c2d-4820-8c9e-fc309117cb67" />
 
-[скриншот логов events-service]
+<img width="1112" height="624" alt="image" src="https://github.com/user-attachments/assets/12ae66eb-d56f-4b83-a655-ee1b59edc9f7" />
+
 
 
 
